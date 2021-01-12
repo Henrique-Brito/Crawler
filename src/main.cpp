@@ -14,9 +14,9 @@ struct data{
 	data(){}
 };
 
-const int limit = 10000;
+const int limit = 1000;
 std::vector<std::string> all_links;
-std::vector<std::vector<std::string>> new_links;
+std::vector<std::vector<std::string>> new_links, html;
 
 const bool debug = false;
 
@@ -32,6 +32,7 @@ void crawl(int id, std::string url){
 	spider.Initialize(url.c_str());
 
 	spider.CrawlNext();
+	html[id].push_back(std::string(spider.lastHtml()));
 
 	if( debug ) std::cout << "Initial string: " << url << std::endl;
 
@@ -46,8 +47,6 @@ void crawl(int id, std::string url){
 		if( false ) std::cout << "Link " << i << ": " << spider.getOutboundLink(i) << std::endl;
 	}
 
-	//std::cout << "Error crawling. Thread id: " << id << ", url: " << url << std::endl;
-	//std::cout << spider.lastErrorText() << std::endl;
 
 }
 
@@ -67,7 +66,7 @@ void* short_term_scheduler(void* d){
 }
 
 void long_term_scheduler(std::vector<std::string>& url){
-
+	
 	std::map<std::string, std::vector<std::string>> host;
 
 	for( std::string s : url ){
@@ -87,50 +86,55 @@ void long_term_scheduler(std::vector<std::string>& url){
 		}
 	}
 
-
-	int n = (int)host.size();
-	new_links.clear();
-	new_links.resize(n);
-
-	std::vector<pthread_t> threads(n);
-
-	int i=0;
-	for( auto e : host ){
-		data* d = new data;
-		d->url = e.second;
-		d->id = i;
-		int ret = pthread_create(&threads[i], NULL, short_term_scheduler, (void *)d);
-
-		if( ret ){
-			std::cout << "Error cant create thread" << std::endl;
-			exit(-1);
-		}
-
-		i++;
-	}
-
-	void *status;
-	for( i=0; i<n; i++ ){
-		int ret = pthread_join(threads[i], &status);
-		if( ret ){
-			std::cout << "Error cant join thread" << std::endl;
-			exit(-1);
-		}
-	}
-
-	if( debug ) std::cout << "Joined all Threads" << std::endl;
-
 	bool leave = false;
-	host.clear();
-	for( i=0; i<n and not leave; i++ ){
-		for( std::string s : new_links[i] ){
-			all_links.push_back(s);
-			if( all_links.size() >= limit ){
-				leave = true;
-				break;
+	while( not leave ){
+
+		int n = (int)host.size();
+		new_links.clear();
+		new_links.resize(n);
+		
+		html.clear();
+		html.resize(n);
+
+		std::vector<pthread_t> threads(n);
+
+		int i=0;
+		for( auto e : host ){
+			data* d = new data;
+			d->url = e.second;
+			d->id = i;
+			int ret = pthread_create(&threads[i], NULL, short_term_scheduler, (void *)d);
+
+			if( ret ){
+				std::cout << "Error cant create thread" << std::endl;
+				exit(-1);
 			}
-			std::string d(domain(s));
-			host[d].push_back(s);
+
+			i++;
+		}
+
+		void *status;
+		for( i=0; i<n; i++ ){
+			int ret = pthread_join(threads[i], &status);
+			if( ret ){
+				std::cout << "Error cant join thread" << std::endl;
+				exit(-1);
+			}
+		}
+
+		if( debug ) std::cout << "Joined all Threads" << std::endl;
+
+		host.clear();
+		for( i=0; i<n and not leave; i++ ){
+			for( std::string s : new_links[i] ){
+				all_links.push_back(s);
+				if( all_links.size() >= limit ){
+					leave = true;
+					break;
+				}
+				std::string d(domain(s));
+				host[d].push_back(s);
+			}
 		}
 	}
 }
