@@ -5,25 +5,49 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
 #include <unistd.h>
 #include <fstream>
 
 struct data{
 	int id;
-	std::vector<std::string> url;
+	std::vector<std::pair<int, std::string>> url;
 	data(){}
 };
 
 const int limit = 1000;
+
 std::vector<std::string> all_links;
-std::vector<std::vector<std::string>> new_links, html;
+std::vector<std::set<std::string>> new_links;
 
 const bool debug = false;
 
 CkSpider sdr;
-
 std::string domain(std::string& s){
 	return sdr.getBaseDomain(s.c_str());
+}
+
+std::string collect_html(std::string url){
+	CkSpider spider;
+	spider.Initialize(url.c_str());
+	spider.CrawlNext();
+	return spider.lastHtml();
+}
+
+const std::string file_prefix="data/website";
+const std::string file_sufix=".html";
+
+int file_counter=0;
+void output_html(std::string html){
+	
+	std::ofstream out(file_prefix+std::to_string(file_counter)+file_sufix);
+	file_counter++;
+
+	if( out.is_open() ){
+		out << html;
+	}else{
+		std::cout << "Error: cant open write file - HTML" << std::endl;
+	}
 }
 
 void crawl(int id, std::string url){
@@ -32,18 +56,17 @@ void crawl(int id, std::string url){
 	spider.Initialize(url.c_str());
 
 	spider.CrawlNext();
-	html[id].push_back(std::string(spider.lastHtml()));
+	output_html(spider.lastHtml());
 
 	if( debug ) std::cout << "Initial string: " << url << std::endl;
 
-
 	for( int i=0; i<spider.get_NumUnspidered(); i++ ){
-		new_links[id].push_back(std::string(spider.getUnspideredUrl(i)));
+		output_html(std::string(spider.getUnspideredUrl(i)));
 		if( false ) std::cout << "Link " << i << ": " << spider.getUnspideredUrl(i) << std::endl;
 	}
 
 	for( int i=0; i<spider.get_NumOutboundLinks(); i++ ){
-		new_links[id].push_back(std::string(spider.getOutboundLink(i)));
+		new_links[id].insert(std::string(spider.getOutboundLink(i)));
 		if( false ) std::cout << "Link " << i << ": " << spider.getOutboundLink(i) << std::endl;
 	}
 
@@ -52,15 +75,12 @@ void crawl(int id, std::string url){
 
 void* short_term_scheduler(void* d){
 
-	int id = ((data*)d)->id;
-	std::vector<std::string> url = ((data*)d)->url;  
+	std::vector<std::pair<int, std::string>> url = ((data*)d)->url;  
 
-	for( std::string s : url ){
-		crawl(id, s);
+	for( auto e : url ){
+		crawl(e.first, e.second);
 		usleep(100000);
 	}
-
-	if( debug ) std::cout << "Exiting thread: " << id << std::endl;
 
 	pthread_exit(NULL);
 }
@@ -93,9 +113,6 @@ void long_term_scheduler(std::vector<std::string>& url){
 		new_links.clear();
 		new_links.resize(n);
 		
-		html.clear();
-		html.resize(n);
-
 		std::vector<pthread_t> threads(n);
 
 		int i=0;
