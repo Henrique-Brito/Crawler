@@ -14,7 +14,7 @@
 #define NUM_THREADS 12
 
 const bool debug = true;
-const int limit = 100000;
+const int limit = 50000;
 const int limit_level_1 = 300;
 const int limit_outbound_links = 300;
 const int limit_queue_size = 50000;
