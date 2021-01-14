@@ -41,6 +41,14 @@ std::vector<statistics> to_output;
 
 const bool debug = true;
 
+const std::string file_prefix="data/website";
+const std::string file_sufix=".html";
+
+pthread_mutex_t mutex;
+
+int total_crawled=0; 
+int file_counter=0;
+
 void configure_spider( CkSpider& spider ){
 	spider.put_Utf8(true);
 	spider.put_ConnectTimeout(4);
@@ -63,13 +71,6 @@ std::string collect_html(std::string url){
 	return spider.lastHtml();
 }
 
-const std::string file_prefix="data/website";
-const std::string file_sufix=".html";
-
-pthread_mutex_t mutex;
-
-int total_crawled=0; 
-int file_counter=0;
 
 int output_html(std::string html){
 
