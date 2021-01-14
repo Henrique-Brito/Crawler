@@ -14,13 +14,14 @@
 #define NUM_THREADS 12
 
 const bool debug = true;
-const int limit = 3000;
-const int limit_level_1 = 100;
+const int limit = 10000;
+const int limit_level_1 = 300;
+const int limit_outbound_links = 300;
 const std::string file_prefix="data/website";
 const std::string file_sufix=".html";
 
 struct data{
-	std::vector<std::pair<int, std::string>> url;
+	int id;
 	data(){}
 };
 
@@ -74,6 +75,7 @@ struct seed_queue{
 		pthread_mutex_lock(&mutex_queue);
 		
 		if( q.size() == 0 ){
+			pthread_mutex_unlock(&mutex_queue);
 			return ret;
 		}
 		ret = q.front();
@@ -116,14 +118,15 @@ struct new_links_queue{
 
 };
 
-seed_queue Q;
-new_links_queue link_Q;
+seed_queue Q = seed_queue();
+new_links_queue link_Q = new_links_queue();
 
 pthread_t threads[NUM_THREADS];
 
 pthread_mutex_t mutex_file_output, mutex_counter;
 
 int url_counter=0;
+int file_counter=0;
 
 int total_crawled(){
 	pthread_mutex_lock(&mutex_counter);
@@ -168,8 +171,8 @@ int output_html(std::string html){
 
 	pthread_mutex_lock(&mutex_file_output);
 	
-	std::ofstream out(file_prefix+std::to_string(url_counter)+file_sufix);
-	url_counter++;
+	std::ofstream out(file_prefix+std::to_string(file_counter)+file_sufix);
+	file_counter++;
 
 	if( out.is_open() ){
 		out << html;
@@ -192,16 +195,19 @@ void crawl( int id, std::string url ){
 	
 	bool ok = spider.CrawlNext();
 	
-	output_html(spider.lastHtml());
-
 	if( not ok ){	
 		return;
 	}
+	
+	output_html(spider.lastHtml());
 
+	int qnt=0;
+	
 	for( int i=0; i<spider.get_NumUnspidered() and i<limit_level_1; i++ ){
-		spider.SleepMs(100);
 
-		pthread_mutex_lock(&mutex_file_output);
+		if( i%10 == 0 and total_crawled() > limit ) break;
+		
+		spider.SleepMs(100);
 
 		clock_t begin = clock();
 
@@ -216,17 +222,17 @@ void crawl( int id, std::string url ){
 
 		clock_t end = clock();
 
-		pthread_mutex_unlock(&mutex_file_output);
-		
 		if( ok ){
 			Q.to_output[id].average_time += double(end-begin) / CLOCKS_PER_SEC;
-			Q.to_output[id].number++;
+			Q.to_output[id].number++; qnt++;
 			Q.to_output[id].average_size += (int)html.size();
 		}
 	}
 
+	add_crawled(qnt);
+
 	std::vector<std::string> links;
-	for( int i=0; i<spider.get_NumOutboundLinks(); i++ ){
+	for( int i=0; i<spider.get_NumOutboundLinks() and i<limit_outbound_links; i++ ){
 		links.push_back(std::string(spider.getOutboundLink(i)));
 	}
 
@@ -234,10 +240,13 @@ void crawl( int id, std::string url ){
 
 }
 
-void* short_term_scheduler(void* not_used){
-	
+void* short_term_scheduler(void* arg){
+
+	//int id = ((data*)arg)->id;
 	while( total_crawled() <= limit ){
-			
+		
+		//if( debug and id == 0 ) std::cout << "Here"<< std::endl;
+
 		auto v = Q.get_task();
 
 		if( v.size() == 0 ){
@@ -247,7 +256,7 @@ void* short_term_scheduler(void* not_used){
 
 		for( auto e : v ){
 			crawl(e.first, e.second);
-			if( total_crawled() <= limit ){
+			if( total_crawled() > limit ){
 				break;
 			}
 		}
@@ -271,9 +280,13 @@ void long_term_scheduler(std::vector<std::string>& seed_url){
 
 	for( auto e : host ){
 		Q.add_task(e.second);
-	}
+	}	
+
+	if( debug ) std::cout << "Added initial urls" << std::endl;
 
 	while( total_crawled() <= limit ){
+
+		if( false ) std::cout << "In while loop" << std::endl;
 
 		std::vector<std::string> links = link_Q.get_link();
 
@@ -321,8 +334,30 @@ int main( int argc, char** argv ){
 
 	pthread_mutex_init(&mutex_file_output, NULL);
 	pthread_mutex_init(&mutex_counter, NULL);
+
+	for( int i=0; i<NUM_THREADS; i++ ){
+		data* d = new data;
+		d->id = i;
+		int ret = pthread_create(&threads[i], NULL, short_term_scheduler, (void*)d);
+
+		if( ret ){
+			std::cout << "Error cant create thread" << '\n';
+			exit(-1);
+		}
+	}
 	
+	if( debug ) std::cout << "Created all threads" << '\n';
+
 	long_term_scheduler(url);
+
+	void* status;
+	for( int i=0; i<NUM_THREADS; i++ ){
+		int ret = pthread_join(threads[i], &status);
+		if( ret ){
+			std::cout << "Error cant join thread" << '\n';
+			exit(-1);
+		}
+	}
 
 	if( debug ) std::cout << "Done Crawling" << '\n';
 
@@ -330,9 +365,10 @@ int main( int argc, char** argv ){
 
 	if( out.is_open() ){
 		for( auto s : Q.to_output ){
+			if( s.number == 0 ) continue;
 			s.process();
 			out << s.website << std::endl;
-			out << "Number at level 1 = " <<  s.number << '\n';
+			out << "Number of websites at level 1 = " <<  s.number << '\n';
 			out << "Average size = " <<  s.average_size << '\n';
 			out << "Average time = " <<  s.average_time << '\n';
 			out << "--------------------------------------------------------" << '\n';
