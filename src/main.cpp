@@ -14,9 +14,10 @@
 #define NUM_THREADS 12
 
 const bool debug = true;
-const int limit = 10000;
+const int limit = 100000;
 const int limit_level_1 = 300;
 const int limit_outbound_links = 300;
+const int limit_queue_size = 50000;
 const std::string file_prefix="data/website";
 const std::string file_sufix=".html";
 
@@ -58,38 +59,40 @@ struct seed_queue{
 	void add_task(std::vector<std::string>& v){
 		pthread_mutex_lock(&mutex_queue);
 
-		std::vector<std::pair<int, std::string>> to_add;
-		for( std::string s : v ){
-			to_add.push_back({counter, s});
-			counter++;
-			to_output.push_back(statistics(s));
+		if( q.size() <= limit_queue_size ){
+			std::vector<std::pair<int, std::string>> to_add;
+			for( std::string s : v ){
+				to_add.push_back({counter, s});
+				counter++;
+				to_output.push_back(statistics(s));
+			}
+			q.push(to_add);
 		}
-		q.push(to_add);
 
 		pthread_mutex_unlock(&mutex_queue);
 	}
 
 	std::vector<std::pair<int, std::string>> get_task(){
 		std::vector<std::pair<int, std::string>> ret; 	
-		
+
 		pthread_mutex_lock(&mutex_queue);
-		
+
 		if( q.size() == 0 ){
 			pthread_mutex_unlock(&mutex_queue);
 			return ret;
 		}
 		ret = q.front();
 		q.pop();
-		
+
 		pthread_mutex_unlock(&mutex_queue);
-		
+
 		return ret;
 	}
 
 };
 
 struct new_links_queue{
-	
+
 	std::queue<std::string> q;
 	pthread_mutex_t mutex_queue;
 
@@ -99,8 +102,11 @@ struct new_links_queue{
 
 	void add_link(std::vector<std::string>& v){
 		pthread_mutex_lock(&mutex_queue);
-		for( std::string s : v ){
-			q.push(s);
+
+		if( q.size() <= limit_queue_size ){
+			for( std::string s : v ){
+				q.push(s);
+			}
 		}
 		pthread_mutex_unlock(&mutex_queue);
 	}
@@ -155,7 +161,7 @@ std::string domain(std::string& s){
 }
 
 bool collect_html(std::string& url, std::string& ret){
-	
+
 	CkSpider spider;
 	configure_spider(spider);
 	spider.Initialize(url.c_str());
@@ -163,14 +169,14 @@ bool collect_html(std::string& url, std::string& ret){
 	bool ok = spider.CrawlNext();
 	if( not ok ) return false;
 	ret = spider.lastHtml();
-	
+
 	return true;
 }
 
 int output_html(std::string html){
 
 	pthread_mutex_lock(&mutex_file_output);
-	
+
 	std::ofstream out(file_prefix+std::to_string(file_counter)+file_sufix);
 	file_counter++;
 
@@ -179,7 +185,7 @@ int output_html(std::string html){
 	}else{
 		std::cout << "Error: cant open write file - HTML" << '\n';
 	}
-	
+
 	pthread_mutex_unlock(&mutex_file_output);
 
 	return (int)html.size();
@@ -192,27 +198,27 @@ void crawl( int id, std::string url ){
 	spider.Initialize(url.c_str());
 
 	spider.SleepMs(100);
-	
+
 	bool ok = spider.CrawlNext();
-	
+
 	if( not ok ){	
 		return;
 	}
-	
+
 	output_html(spider.lastHtml());
 
 	int qnt=0;
-	
+
 	for( int i=0; i<spider.get_NumUnspidered() and i<limit_level_1; i++ ){
 
 		if( i%10 == 0 and total_crawled() > limit ) break;
-		
+
 		spider.SleepMs(100);
 
 		clock_t begin = clock();
 
 		std::string url(spider.getUnspideredUrl(i)); 
-		
+
 		std::string html;
 		bool ok = collect_html(url, html);
 
@@ -229,7 +235,7 @@ void crawl( int id, std::string url ){
 		}
 	}
 
-	add_crawled(qnt);
+	add_crawled(qnt+1);
 
 	std::vector<std::string> links;
 	for( int i=0; i<spider.get_NumOutboundLinks() and i<limit_outbound_links; i++ ){
@@ -244,7 +250,7 @@ void* short_term_scheduler(void* arg){
 
 	//int id = ((data*)arg)->id;
 	while( total_crawled() <= limit ){
-		
+
 		//if( debug and id == 0 ) std::cout << "Here"<< std::endl;
 
 		auto v = Q.get_task();
@@ -301,7 +307,7 @@ void long_term_scheduler(std::vector<std::string>& seed_url){
 			Q.add_task(e.second);
 		}
 	}
-	
+
 }
 
 int main( int argc, char** argv ){
@@ -309,7 +315,7 @@ int main( int argc, char** argv ){
 	clock_t begin = clock();
 
 	if( debug ) std::cout << "Begin" << '\n';
-	
+
 	if( argc < 2 ){
 		std::cout << "Invalid parameters" << '\n';
 		return 0;
@@ -345,7 +351,7 @@ int main( int argc, char** argv ){
 			exit(-1);
 		}
 	}
-	
+
 	if( debug ) std::cout << "Created all threads" << '\n';
 
 	long_term_scheduler(url);
