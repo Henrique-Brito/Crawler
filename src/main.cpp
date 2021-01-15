@@ -7,6 +7,7 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <unordered_set>
 #include <unistd.h>
 #include <fstream>
 #include <ctime>
@@ -14,11 +15,11 @@
 #define NUM_THREADS 12
 
 const bool debug = true;
-const int limit = 50000;
+const int limit = 100000;
 const int limit_level_1 = 300;
 const int limit_outbound_links = 300;
 const int limit_queue_size = 50000;
-const std::string file_prefix="data/website";
+const std::string file_prefix="data/thread";
 const std::string file_sufix=".html";
 
 struct data{
@@ -91,6 +92,8 @@ struct seed_queue{
 
 };
 
+std::unordered_set<std::string> seen;
+
 struct new_links_queue{
 
 	std::queue<std::string> q;
@@ -105,7 +108,10 @@ struct new_links_queue{
 
 		if( q.size() <= limit_queue_size ){
 			for( std::string s : v ){
-				q.push(s);
+				if( not seen.count(s) ){
+					q.push(s);
+					seen.insert(s);
+				}
 			}
 		}
 		pthread_mutex_unlock(&mutex_queue);
@@ -129,10 +135,11 @@ new_links_queue link_Q = new_links_queue();
 
 pthread_t threads[NUM_THREADS];
 
-pthread_mutex_t mutex_file_output, mutex_counter;
+pthread_mutex_t mutex_counter;
+
 
 int url_counter=0;
-int file_counter=0;
+int file_counter[NUM_THREADS];
 
 int total_crawled(){
 	pthread_mutex_lock(&mutex_counter);
@@ -173,12 +180,10 @@ bool collect_html(std::string& url, std::string& ret){
 	return true;
 }
 
-int output_html(std::string html){
+int output_html(std::string html, int id){
 
-	pthread_mutex_lock(&mutex_file_output);
-
-	std::ofstream out(file_prefix+std::to_string(file_counter)+file_sufix);
-	file_counter++;
+	std::ofstream out(file_prefix+std::to_string(id)+"/website"+std::to_string(file_counter[id])+file_sufix);
+	file_counter[id]++;
 
 	if( out.is_open() ){
 		out << html;
@@ -186,12 +191,10 @@ int output_html(std::string html){
 		std::cout << "Error: cant open write file - HTML" << '\n';
 	}
 
-	pthread_mutex_unlock(&mutex_file_output);
-
 	return (int)html.size();
 }
 
-void crawl( int id, std::string url ){
+void crawl( int id, std::string url, int thread_id ){
 
 	CkSpider spider;
 	configure_spider(spider);
@@ -205,9 +208,9 @@ void crawl( int id, std::string url ){
 		return;
 	}
 
-	output_html(spider.lastHtml());
+	output_html(spider.lastHtml(), thread_id);
 
-	int qnt=0;
+	int qnt=1;
 
 	for( int i=0; i<spider.get_NumUnspidered() and i<limit_level_1; i++ ){
 
@@ -223,7 +226,7 @@ void crawl( int id, std::string url ){
 		bool ok = collect_html(url, html);
 
 		if( ok ){
-			output_html(html);
+			output_html(html, thread_id);
 		}
 
 		clock_t end = clock();
@@ -235,11 +238,12 @@ void crawl( int id, std::string url ){
 		}
 	}
 
-	add_crawled(qnt+1);
+	add_crawled(qnt);
 
 	std::vector<std::string> links;
 	for( int i=0; i<spider.get_NumOutboundLinks() and i<limit_outbound_links; i++ ){
-		links.push_back(std::string(spider.getOutboundLink(i)));
+		std::string str(spider.getOutboundLink(i));
+		links.push_back(str);
 	}
 
 	link_Q.add_link(links);
@@ -248,10 +252,8 @@ void crawl( int id, std::string url ){
 
 void* short_term_scheduler(void* arg){
 
-	//int id = ((data*)arg)->id;
+	int id = ((data*)arg)->id;
 	while( total_crawled() <= limit ){
-
-		//if( debug and id == 0 ) std::cout << "Here"<< std::endl;
 
 		auto v = Q.get_task();
 
@@ -261,7 +263,7 @@ void* short_term_scheduler(void* arg){
 		}
 
 		for( auto e : v ){
-			crawl(e.first, e.second);
+			crawl(e.first, e.second, id);
 			if( total_crawled() > limit ){
 				break;
 			}
@@ -336,12 +338,16 @@ int main( int argc, char** argv ){
 		return 0;
 	}
 
+	for( std::string s : url ){
+		seen.insert(s);
+	}
+
 	if( debug ) std::cout << "Read input file" << '\n';
 
-	pthread_mutex_init(&mutex_file_output, NULL);
 	pthread_mutex_init(&mutex_counter, NULL);
 
 	for( int i=0; i<NUM_THREADS; i++ ){
+		file_counter[i] = 0;
 		data* d = new data;
 		d->id = i;
 		int ret = pthread_create(&threads[i], NULL, short_term_scheduler, (void*)d);
